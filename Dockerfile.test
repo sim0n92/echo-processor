@@ -1,0 +1,15 @@
+# Echo Processor - Test Image
+# Runs basic validation tests
+
+FROM python:3.12-alpine
+
+WORKDIR /app
+
+# Copy everything
+COPY . .
+
+# Install test dependencies
+RUN pip install --no-cache-dir -r requirements-dev.txt
+
+# Run tests
+ENTRYPOINT ["python", "-m", "pytest", "tests/", "-v"]
