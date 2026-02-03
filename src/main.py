@@ -149,7 +149,7 @@ def main():
 
         # Build result
         result = {
-            "echoedMessage": f"ECHO: {message}",
+            "echoedMessage": f"ECHO v1.1: {message}",
             "processedAt": datetime.now(timezone.utc).isoformat(),
             "executionId": execution_id
         }

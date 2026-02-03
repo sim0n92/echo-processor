@@ -2,8 +2,8 @@
   "specVersion": "1.0",
   "type": "stdin",
   "name": "echo-processor",
-  "version": "1.0.0",
-  "description": "Simple echo processor for testing - echoes input with delay",
+  "version": "1.1.0",
+  "description": "Echo processor v1.1 - echoes input with delay and version tag",
   "author": "ProcessMonitor Team",
   "repository": "https://github.com/example/echo-processor",
 
