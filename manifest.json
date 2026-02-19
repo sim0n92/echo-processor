@@ -2,8 +2,8 @@
   "specVersion": "1.0",
   "type": "stdin",
   "name": "echo-processor",
-  "version": "2.0.0",
-  "description": "Echo processor v2.0 - actions protocol with execute/terminate support",
+  "version": "2.1.0",
+  "description": "Echo processor v2.1 - actions protocol with Keycloak auth and progress callbacks",
   "author": "ProcessMonitor Team",
   "repository": "https://github.com/example/echo-processor",
 

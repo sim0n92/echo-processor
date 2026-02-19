@@ -6,6 +6,8 @@ Follows Process Class Specification v1.0 (actions protocol):
 - Reads JSON Lines from stdin (first line = action message)
 - Routes to execute or terminate based on _action field
 - Emits progress/result/error on stdout (JSON Lines)
+- Reports progress to ProcessMonitor via authenticated callback endpoint
+- Obtains Bearer token via OAuth2 client credentials (Keycloak)
 - Writes diagnostic logs to /logs/events.log
 - Respects LOG_LEVEL environment variable
 - Supports graceful termination via stdin terminate message
@@ -16,6 +18,8 @@ import os
 import sys
 import threading
 import time
+import urllib.parse
+import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -66,6 +70,86 @@ class Logger:
 
     def close(self):
         self.log_file.close()
+
+
+class CallbackClient:
+    """HTTP client for reporting progress to ProcessMonitor via callback endpoint.
+
+    Uses OAuth2 client credentials flow (Keycloak) for authentication.
+    All methods are no-ops if callback_base_url or keycloak config is missing,
+    allowing graceful degradation for local testing.
+    """
+
+    def __init__(self, callback_base_url: str | None, execution_id: str,
+                 keycloak_config: dict | None, logger):
+        self.callback_base_url = callback_base_url
+        self.execution_id = execution_id
+        self.keycloak = keycloak_config
+        self.logger = logger
+        self._cached_token: str | None = None
+        self.enabled = bool(callback_base_url and keycloak_config
+                            and keycloak_config.get("tokenUrl")
+                            and keycloak_config.get("clientId")
+                            and keycloak_config.get("clientSecret"))
+
+    def _get_token(self) -> str | None:
+        """Obtain Bearer token via OAuth2 client credentials grant."""
+        if self._cached_token:
+            return self._cached_token
+
+        try:
+            data = urllib.parse.urlencode({
+                "grant_type": "client_credentials",
+                "client_id": self.keycloak["clientId"],
+                "client_secret": self.keycloak["clientSecret"],
+            }).encode("utf-8")
+
+            req = urllib.request.Request(
+                self.keycloak["tokenUrl"],
+                data=data,
+                headers={"Content-Type": "application/x-www-form-urlencoded"},
+                method="POST",
+            )
+
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                body = json.loads(resp.read().decode("utf-8"))
+                self._cached_token = body["access_token"]
+                self.logger.info("Keycloak token obtained successfully")
+                return self._cached_token
+
+        except Exception as e:
+            self.logger.warning("Failed to obtain Keycloak token", {"error": str(e)})
+            return None
+
+    def report_progress(self, percent: int, message: str):
+        """POST progress to {callbackBaseUrl}/executions/{executionId}/progress.
+
+        Logs warnings on failure but never raises.
+        """
+        if not self.enabled:
+            return
+
+        token = self._get_token()
+        if not token:
+            return
+
+        url = f"{self.callback_base_url}/executions/{self.execution_id}/progress"
+        payload = json.dumps({"percent": percent, "message": message}).encode("utf-8")
+
+        try:
+            req = urllib.request.Request(
+                url,
+                data=payload,
+                headers={
+                    "Content-Type": "application/json",
+                    "Authorization": f"Bearer {token}",
+                },
+                method="POST",
+            )
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                self.logger.debug("Progress callback sent", {"percent": percent, "status": resp.status})
+        except Exception as e:
+            self.logger.warning("Progress callback failed", {"percent": percent, "error": str(e)})
 
 
 def emit(message: dict):
@@ -121,11 +205,12 @@ def stdin_reader(logger):
         logger.error("stdin_reader error", {"error": str(e)})
 
 
-def handle_execute(params: dict, execution_id: str, logger) -> int:
+def handle_execute(params: dict, execution_id: str, callback_client: CallbackClient, logger) -> int:
     """Execute the echo processing logic.
 
     Checks _terminate_event between steps for responsive termination.
     Uses _terminate_event.wait(timeout=...) instead of time.sleep().
+    Reports progress to ProcessMonitor via callback_client.
     """
     start_time = time.monotonic()
 
@@ -138,6 +223,8 @@ def handle_execute(params: dict, execution_id: str, logger) -> int:
         logger.error("Missing required field: message")
         emit_error("MISSING_FIELD", "Required field 'message' is missing")
         return 2
+
+    callback_client.report_progress(10, "Input validated")
 
     # Check if we should simulate failure
     if should_fail:
@@ -166,6 +253,8 @@ def handle_execute(params: dict, execution_id: str, logger) -> int:
             return 3
 
         emit_progress(percent, step_msg)
+        if percent == 50:
+            callback_client.report_progress(50, "Transforming data...")
         logger.debug(f"Progress: {percent}%", {"step": step_msg})
         _terminate_event.wait(timeout=delay / len(steps))
 
@@ -175,10 +264,11 @@ def handle_execute(params: dict, execution_id: str, logger) -> int:
         return 3
 
     emit_progress(100, "Done")
+    callback_client.report_progress(90, "Finalizing...")
 
     # Build result
     result = {
-        "echoedMessage": f"ECHO v2.0: {message.upper()[::-1]}",
+        "echoedMessage": f"ECHO v2.1: {message.upper()[::-1]}",
         "processedAt": datetime.now(timezone.utc).isoformat(),
         "executionId": execution_id,
     }
@@ -208,7 +298,7 @@ def handle_execute(params: dict, execution_id: str, logger) -> int:
     return 0
 
 
-def handle_terminate(logger) -> int:
+def handle_terminate(callback_client: CallbackClient, logger) -> int:
     """Handle a direct terminate action (first message is terminate)."""
     logger.info("Handling terminate action")
     emit_result({"cleaned": True})
@@ -252,6 +342,24 @@ def main():
             execution_id = meta["executionId"]
             logger.info("Execution ID overridden by _meta", {"executionId": execution_id})
 
+        # Extract callback and keycloak config
+        callback_base_url = meta.get("callbackBaseUrl")
+        keycloak_config = meta.get("keycloak")
+
+        if keycloak_config:
+            # Log presence but NEVER log clientSecret
+            logger.info("Keycloak config present", {
+                "tokenUrl": keycloak_config.get("tokenUrl"),
+                "clientId": keycloak_config.get("clientId"),
+            })
+
+        callback_client = CallbackClient(callback_base_url, execution_id, keycloak_config, logger)
+
+        if callback_client.enabled:
+            logger.info("Callback client enabled", {"callbackBaseUrl": callback_base_url})
+        else:
+            logger.debug("Callback client disabled (missing callbackBaseUrl or keycloak config)")
+
         if not action:
             logger.error("Missing _action field")
             emit_error("MISSING_ACTION", "Required field '_action' is missing from input")
@@ -268,10 +376,10 @@ def main():
             reader_thread = threading.Thread(target=stdin_reader, args=(logger,), daemon=True)
             reader_thread.start()
 
-            return handle_execute(params, execution_id, logger)
+            return handle_execute(params, execution_id, callback_client, logger)
 
         elif action == "terminate":
-            return handle_terminate(logger)
+            return handle_terminate(callback_client, logger)
 
         else:
             logger.error("Unknown action", {"action": action})

@@ -6,7 +6,7 @@ A simple echo processor for testing ProcessMonitor system.
 
 This is a minimal Process Class implementation following the [Process Class Specification v1.0](../../../docs/process-class-specification-v1.md) with the actions protocol.
 
-It echoes back the input message with simulated processing steps, and supports graceful termination.
+It echoes back the input message with simulated processing steps, supports graceful termination, and reports progress to ProcessMonitor via authenticated callback endpoints.
 
 ## Actions
 
@@ -19,7 +19,15 @@ Echoes back the input message with simulated processing.
 ```json
 {
   "_action": "execute",
-  "_meta": { "executionId": "abc-123" },
+  "_meta": {
+    "executionId": "abc-123",
+    "callbackBaseUrl": "http://processmonitor:5000",
+    "keycloak": {
+      "tokenUrl": "http://keycloak:8080/realms/pm/protocol/openid-connect/token",
+      "clientId": "echo-processor",
+      "clientSecret": "your-client-secret"
+    }
+  },
   "message": "Hello, World!",
   "delay": 1,
   "shouldFail": false,
@@ -38,7 +46,7 @@ Echoes back the input message with simulated processing.
 
 ```json
 {
-  "echoedMessage": "ECHO v2.0: !DLROW ,OLLEH",
+  "echoedMessage": "ECHO v2.1: !DLROW ,OLLEH",
   "processedAt": "2026-02-02T10:30:00.123456+00:00",
   "executionId": "abc-123"
 }
@@ -76,7 +84,21 @@ All stdin messages use the actions protocol:
 |-------|-------------|
 | `_action` | Action to perform: `execute` or `terminate` |
 | `_meta.executionId` | Execution identifier (overrides `EXECUTION_ID` env var) |
-| `_meta.callbackBaseUrl` | Optional callback URL (reserved for future use) |
+| `_meta.callbackBaseUrl` | Base URL for progress callbacks to ProcessMonitor |
+| `_meta.keycloak.tokenUrl` | Keycloak token endpoint for OAuth2 client credentials flow |
+| `_meta.keycloak.clientId` | OAuth2 client ID |
+| `_meta.keycloak.clientSecret` | OAuth2 client secret (**never logged**) |
+
+### Progress Callbacks
+
+When `_meta.callbackBaseUrl` and `_meta.keycloak` are provided, the process reports progress to ProcessMonitor by POSTing to `{callbackBaseUrl}/executions/{executionId}/progress` with a Bearer token obtained via OAuth2 client credentials flow.
+
+Progress is reported at these points during execution:
+- **10%** — Input validated
+- **50%** — Transforming data
+- **90%** — Finalizing
+
+If the callback URL or Keycloak config is missing, callbacks are silently skipped (graceful degradation for local testing).
 
 ## Environment Variables
 
@@ -123,7 +145,7 @@ $ echo '{"_action":"execute","_meta":{"executionId":"test-1"},"message":"Test me
 {"type": "progress", "percent": 75, "message": "Preparing output..."}
 {"type": "progress", "percent": 90, "message": "Finalizing..."}
 {"type": "progress", "percent": 100, "message": "Done"}
-{"type": "result", "data": {"echoedMessage": "ECHO v2.0: EGASSEM TSET", "processedAt": "2026-02-02T10:30:00.123456+00:00", "executionId": "test-1"}}
+{"type": "result", "data": {"echoedMessage": "ECHO v2.1: EGASSEM TSET", "processedAt": "2026-02-02T10:30:00.123456+00:00", "executionId": "test-1"}}
 
 $ echo $?
 0

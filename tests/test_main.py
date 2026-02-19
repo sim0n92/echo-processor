@@ -46,10 +46,10 @@ def test_manifest_version_semver():
     assert re.match(r'^\d+\.\d+\.\d+$', version), f"Version '{version}' must be SemVer"
 
 
-def test_manifest_version_is_2():
-    """Version must be 2.0.0 for actions protocol"""
+def test_manifest_version_is_2_1():
+    """Version must be 2.1.0 for actions protocol with callback support"""
     manifest = _load_manifest()
-    assert manifest.get("version") == "2.0.0"
+    assert manifest.get("version") == "2.1.0"
 
 
 def test_manifest_has_execute_action():
