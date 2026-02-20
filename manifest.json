@@ -5,7 +5,8 @@
   "version": "2.1.0",
   "description": "Echo processor v2.1 - actions protocol with Keycloak auth and progress callbacks",
   "author": "ProcessMonitor Team",
-  "repository": "https://github.com/example/echo-processor",
+  "repository": "https://github.com/sim0n92/echo-processor",
+  "authentication": true,
 
   "actions": {
     "execute": {
